@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from .smiles2fing import smiles2fing
 
 
@@ -52,16 +53,19 @@ def new_multiclass2binary(y, tg_num: int):
 
 
 def load_pred_data():
-    df_tmp = pd.read_excel('pred_data.xlsx').drop_duplicates(subset = ('PREFERRED_NAME', 'SMILES'))
+    df_tmp = pd.read_excel('pred_data.xlsx').drop_duplicates(subset=('PREFERRED_NAME', 'SMILES'))
     
     # try:
     #     df = pd.read_excel(f'{path}/pred_data.xlsx')
     # except: 
     #     df = pd.read_excel(f'{path}pred_data.xlsx')
     
-    df = df_tmp[df_tmp['SMILES'].notna()].reset_index(drop = True)
+    df = df_tmp[df_tmp['SMILES'].notna()].reset_index(drop=True)
     
     drop_idx, fingerprints = smiles2fing(df.SMILES)
-    df = df.drop(drop_idx).reset_index(drop = True)
+    df = df.drop(drop_idx).reset_index(drop=True)
+    
+    # Convert fingerprints to numpy arrays
+    fingerprints = np.array(fingerprints)
     
     return fingerprints, df, df_tmp

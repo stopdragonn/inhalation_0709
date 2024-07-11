@@ -29,13 +29,13 @@ from module.get_model import (
 from module.common import (
     data_split, 
     binary_smote_cross_validation,
-    print_best_param
+    print_best_param,
+    calculate_ad_threshold,
+    euclidean_distance
 )
-
 
 warnings.filterwarnings('ignore')
 logging.basicConfig(format='', level=logging.INFO)
-
 
 def main():
     parser = get_parser()
@@ -47,7 +47,7 @@ def main():
     logging.info('=================================')
     logging.info('tg{} {} {}'.format(args.tg_num, args.inhale_type, args.model))
 
-    x, y = load_data(path = 'data', tg_num = args.tg_num, inhale_type = args.inhale_type)
+    x, y = load_data(path='data', tg_num=args.tg_num, inhale_type=args.inhale_type)
     if args.cat3tohigh:
         y = new_multiclass2binary(y, args.tg_num)
     else:
@@ -76,10 +76,8 @@ def main():
         result['auc']['model'+str(p)] = []
         
         for seed in range(args.num_run):
-            model = load_model(model = args.model, seed = seed, param = params[p])
-            
+            model = load_model(model=args.model, seed=seed, param=params[p])
             cv_result = binary_smote_cross_validation(model, x_train, y_train, seed, args)
-            
             result['precision']['model'+str(p)].append(cv_result['val_precision'])
             result['recall']['model'+str(p)].append(cv_result['val_recall'])
             result['f1']['model'+str(p)].append(cv_result['val_f1'])
@@ -101,9 +99,7 @@ def main():
             os.makedirs(save_path)
         json.dump(result, open(f'{save_path}/{args.inhale_type}_{args.model}.json', 'w'))
     
-    
-    best_param = print_best_param(val_result = result, metric = args.metric)
-    
+    best_param = print_best_param(val_result=result, metric=args.metric)
     m = list(result['model'].keys())[list(result['model'].values()).index(best_param)]
     
     # val result
@@ -113,7 +109,6 @@ def main():
     auc = result['auc'][m]
     f1 = result['f1'][m]
     
-    
     logging.info("best param: {}".format(best_param))
     logging.info("validation result")
     logging.info("precision: {:.3f}({:.3f})".format(np.mean(precision), np.std(precision)))
@@ -122,15 +117,16 @@ def main():
     logging.info("auc: {:.3f}({:.3f})".format(np.mean(auc), np.std(auc)))
     logging.info("f1: {:.3f}({:.3f})".format(np.mean(f1), np.std(f1)))
     
-    
-    # test reulst
-    smote = SMOTE(random_state = args.smoteseed, k_neighbors = args.neighbor)
+    # test result
+    smote = SMOTE(random_state=args.smoteseed, k_neighbors=args.neighbor)
     x_train, y_train = smote.fit_resample(x_train, y_train)
-    
-    model = load_model(model = args.model, seed = seed, param = best_param)
-    
+    model = load_model(model=args.model, seed=seed, param=best_param)
     model.fit(x_train, y_train)
-    
+
+    # AD 계산
+    D_T = calculate_ad_threshold(x_train, k=args.ad_k, Z=args.ad_z)
+    print(f"Applicability Domain threshold (D_T): {D_T}")
+
     if args.model == 'plsda':
         pred_score = model.predict(x_test)
         pred = np.where(pred_score < 0.5, 0, 1).reshape(-1)
@@ -138,7 +134,14 @@ def main():
         pred = model.predict(x_test)
         pred_score = model.predict_proba(x_test)[:, 1]
     
-    
+    # AD 내 여부 확인
+    reliability_status = []
+    reliability_distance = []
+    for fp in x_test.values:
+        ed = euclidean_distance(fp.reshape(-1), x_train)
+        reliability_status.append('reliable' if ed < D_T else 'unreliable')
+        reliability_distance.append(ed)
+
     logging.info("test result")
     logging.info("best param: {}".format(best_param))
     logging.info("precision: {:.3f}".format(precision_score(y_test, pred)))
@@ -146,7 +149,8 @@ def main():
     logging.info("accuracy: {:.3f}".format(accuracy_score(y_test, pred)))
     logging.info("auc: {:.3f}".format(roc_auc_score(y_test, pred_score)))
     logging.info("f1: {:.3f}".format(f1_score(y_test, pred)))
-
+    logging.info("reliability status: {}".format(reliability_status))
+    logging.info("reliability distance: {}".format(reliability_distance))
 
 if __name__ == '__main__':
     main()

@@ -18,13 +18,13 @@ from module.smiles2fing import smiles2fing
 from module.get_model import load_model
 from module.common import (
     load_val_result,
-    print_best_param
+    print_best_param,
+    calculate_ad_threshold,
+    euclidean_distance
 )
-
 
 warnings.filterwarnings('ignore')
 RDLogger.DisableLog('rdApp.*')
-
 
 def main():
     parser = get_parser()
@@ -33,7 +33,7 @@ def main():
     except:
         args = parser.parse_args([])
 
-    x, y = load_data(path = '../data', tg_num = args.tg_num, inhale_type = args.inhale_type)
+    x, y = load_data(path='../data', tg_num=args.tg_num, inhale_type=args.inhale_type)
     y = multiclass2binary(y, args.tg_num)
     
     fingerprints, pred_df, pred_df_origin = load_pred_data()
@@ -53,26 +53,39 @@ def main():
     elif (args.tg_num == 413) & (args.inhale_type == 'aerosol'):
         args.model = 'mlp'
     
-    val_result = load_val_result(path = '..', args, is_smote = True)
+    val_result = load_val_result(path='..', args=args, is_smote=True)
     best_param = print_best_param(val_result, args.metric)
     
-    model = load_model(model = args.model, seed = 0, param = best_param)
+    model = load_model(model=args.model, seed=0, param=best_param)
     
-    smote = SMOTE(random_state = args.smoteseed, k_neighbors = args.neighbor)
+    smote = SMOTE(random_state=args.smoteseed, k_neighbors=args.neighbor)
     x, y = smote.fit_resample(x, y)
     
     model.fit(x, y)
     
+    # AD 계산
+    D_T = calculate_ad_threshold(x, k=args.ad_k, Z=args.ad_z)
+    print(f"Applicability Domain threshold (D_T): {D_T}")
+
     if args.model == 'plsda':
         pred_score = model.predict(fingerprints)
-        # pred = np.where(pred_score < 0.5, 0, 1).reshape(-1)
     else:
         pred_score = model.predict_proba(fingerprints)[:, 1]
     
+    # AD 내 여부 확인
+    reliability_status = []
+    reliability_distance = []
+    for fp in fingerprints:
+        fp = np.array(fp).reshape(-1)  # Ensure fp is a 1-D array
+        ed = euclidean_distance(fp, x)
+        reliability_status.append('reliable' if ed < D_T else 'unreliable')
+        reliability_distance.append(ed)
+    
     pred_df['pred'] = pred_score
-    result = pd.merge(pred_df_origin, pred_df[['PREFERRED_NAME', 'SMILES', 'pred']], how = 'left', on = ('PREFERRED_NAME', 'SMILES'))
-    result.to_excel(f'pred_result/tg{args.tg_num}_{args.inhale_type}_{args.model}.xlsx', header = True, index = False)
-
+    pred_df['reliability_status'] = reliability_status
+    pred_df['reliability_distance'] = reliability_distance
+    result = pd.merge(pred_df_origin, pred_df[['PREFERRED_NAME', 'SMILES', 'pred', 'reliability_status', 'reliability_distance']], how='left', on=('PREFERRED_NAME', 'SMILES'))
+    result.to_excel(f'pred_result/tg{args.tg_num}_{args.inhale_type}_{args.model}.xlsx', header=True, index=False)
 
 if __name__ == '__main__':
     main()
